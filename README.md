@@ -2,7 +2,7 @@
 
 A Gen AI mini project that creates multiple-choice quizzes on any topic using **Google Gemini**, with a clean **Streamlit** interface.
 
-**Live demo:** _add your Streamlit link here after deploying_
+**Live demo:** https://ai-quiz-generator-bymedicaps.streamlit.app
 
 ## Features
 - Any topic, 3-10 questions, Easy / Medium / Hard
