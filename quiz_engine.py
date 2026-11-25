@@ -2,8 +2,17 @@
 import json
 import os
 import re
+import time
 
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+# Backup models, tried in order if the main one is busy
+FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.6-flash"]
+TRANSIENT_MARKERS = ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "overloaded", "high demand", "500", "INTERNAL")
+
+
+def _is_transient(error: Exception) -> bool:
+    text = str(error)
+    return any(m.lower() in text.lower() for m in TRANSIENT_MARKERS)
 
 
 class QuizError(Exception):
@@ -81,21 +90,29 @@ def generate_quiz(topic: str, n: int, difficulty: str, api_key: str,
 
     client = genai.Client(api_key=api_key)
     prompt = build_prompt(topic, n, difficulty)
+    models = [model] + [m for m in FALLBACK_MODELS if m != model]
     last_error = None
 
-    for _ in range(retries + 1):
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json", temperature=0.7
-                ),
-            )
-            return validate_quiz(json.loads(_strip_fences(response.text)))
-        except (json.JSONDecodeError, QuizError) as e:
-            last_error = e  # bad output, try again
-        except Exception as e:
-            raise QuizError(f"Gemini API error: {e}") from e
+    for current in models:
+        for attempt in range(retries + 1):
+            try:
+                response = client.models.generate_content(
+                    model=current,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json", temperature=0.7
+                    ),
+                )
+                return validate_quiz(json.loads(_strip_fences(response.text)))
+            except (json.JSONDecodeError, QuizError) as e:
+                last_error = e  # bad output: try again
+            except Exception as e:
+                last_error = e
+                if not _is_transient(e):
+                    raise QuizError(f"Gemini API error: {e}") from e
+                time.sleep(2 * (attempt + 1))  # busy server: wait 2s, 4s, 6s
 
-    raise QuizError(f"Could not get a valid quiz after several tries ({last_error}).")
+    raise QuizError(
+        "Gemini servers are busy right now. Please wait a minute and click "
+        f"Generate Quiz again. (Last error: {last_error})"
+    )
